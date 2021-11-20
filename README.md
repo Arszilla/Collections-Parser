@@ -1,96 +1,79 @@
-# leaks_parser
+# Collections Parser
+This is a parser based on [p3pperp0tts][p3pperp0tts]' [leaks_parser][leaks_parser] which is used to parse:
+- Collection #1
+- Collection #2
+- Collection #3
+- Collection #4
+- Collection #5
+- AntiPublic #1
+- AntiPublic MYR & ZABUGOR #2 
 
-Parser for data dumps Collection #1 / Collection #2-5
+This is an updated script that will not calculate the:
+- `MD5`
+- `SHA1`
+- `SHA256`
+- `BCRYPT`
 
-## Description
+hashes and write them to the database. Thus, the `credentials.sqlite` database will be way more smaller than his 
+version, thanks to the lack of "unnecessary" information.
 
-This python script is a parser for the latest data dumps collections #1, #2-5, Antipublic #1 and Antipublic MYR & ZABUGOR #2.
-
-It will parse text files from data dumps and will create a sqlite database.
-
-## How to use
-
-The script and the empty database must be moved to the root folder where collections have been decompressed:
-
-```
-Collection #1
-Collection #2
-Collection #3
-Collection #4
-Collection #5
-Antipublic MYR & ZABUGOR #2
-Antipublic #1
-parse2bbdd.py
-leaked_credentials.sqlite
-```
-
-Each collection contains subcollections that are compressed tar.gz files, and should be decompressed too, before calling the script. For example:
+## Usage
+First, set up the dependencies:
 
 ```
-dir F:\Collection #1
-
-Collection  #1_BTC combos
-Collection  #1_Dumps - dehashed
-Collection  #1_EU combos
-Collection  #1_EU combos_1
-Collection  #1_Games combos
-Collection  #1_Games combos_Dumps
-Collection  #1_Games combos_Sharpening
-Collection  #1_MAIL ACCESS combos
-Collection  #1_Monetary combos
-Collection  #1_NEW combo semi private_Dumps
-Collection  #1_NEW combo semi private_EU combo
-Collection  #1_NEW combo semi private_Private combos
-...
+$ wget https://bootstrap.pypa.io/pip/2.7/get-pip.py
+$ python2 get-pip.py
+$ git clone https://github.com/syrusakbary/validate_email
+$ cd validate_email
+$ python2 setup.py install
+$ cd .. && rm -rf validate_email
 ```
 
-Each subcollection contains the files with the credentials to be parsed:
+Afterwards, make sure that `parser.py` and `credentials.sqlite` are in the same folder the collections have been 
+**decompressed**:
 
 ```
-dir F:\Collection  #1_BTC combos
-
-144.txt
-158.txt
-151.txt
-214.txt
-120.txt
-208.txt
-205.txt
-161.txt
-...
+$ tree -x
+.
+├── Collection #1
+│   └── ...
+├── Collection #2
+│   └── ...
+├── Collection #3
+│   └── ...
+├── Collection #4
+│   └── ...
+├── Collection #5
+│   └── ...
+├── Antipublic #1
+│   └── ...
+├── Antipublic MYR & ZABUGOR #2
+│   └── ...
+├── credentials.sqlite3
+├── README.md
+└── parser.py
 ```
 
-The script will be able to parse most of these files with credentials.
+Do note that each collection's subcollections **must be** decompressed as well. 
 
-When a file is correctly parsed (and credentials are added to the database), it is renamed by adding the extension .ALREADYPARSED.
+After making sure that everything is ready, run the script with the following command:
 
-The script will create three output files:
+```
+$ python2 parser.py
+```
 
-- consistences.txt -> path to files correctly imported to database
-- inconsistences.txt -> path to files with unknown format that were not imported to database
-- exceptions.txt -> path to files that cause exception while managing them
+The script will be aable to parse most of these files with credentials. When a file is correctly parsed (and 
+credentials are added to the database), it will renamed by adding the extension `.PARSED`.
 
-Most of the files are imported correctly. The files that were not imported are logged into inconsistences.txt and exceptions.txt (and, in addition, they are not renamed to *.ALREADYPARSED). Probably it is necesary to implement a custom parser for that files.
+After the script is ran, there'll be 3 new files:
+1. `consistences.txt`: This will contain the path to the files that were correctly imported to the database.
+2. `inconsistencies.txt`: This will contain the path to the files that had an unknown format, thus they were not 
+imported to database.
+1. `exceptions.txt`: This will contain the path to the files that caused exception(s) while attempting to parse them.
 
-## Database format
+Majority of the files will be imported correctly. For the files that were not imported, check `inconsistencies.txt` 
+and `exceptions.txt`. These files will **not** be renamed to `*.PARSED`. For these files, it'll be a good idea to 
+create/implement a custom parser.
 
-### Tables
-
-  - Collections
-  - Subcollections
-  - Credentials
-
-### Credentials table's columns
-
-  - collection INTEGER   -> index for Collections table
-  - subcollection INTEGER -> index for Subcollections table
-  - username TEXT  
-  - email TEXT
-  - password_plaintext TEXT
-  - password_md5 TEXT
-  - password_sha1 TEXT
-  - password_sha256 TEXT
-  - password_bcrypt TEXT
-  
-  
-
+[p3pperp0tts]:  https://github.com/p3pperp0tts/
+[leaks_parser]: https://github.com/p3pperp0tts/leaks_parser
