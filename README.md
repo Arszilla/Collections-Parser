@@ -49,7 +49,7 @@ $ tree -x
 │   └── ...
 ├── Antipublic MYR & ZABUGOR #2
 │   └── ...
-├── credentials.sqlite3
+├── credentials.sqlite
 ├── README.md
 └── parser.py
 ```
