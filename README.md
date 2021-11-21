@@ -29,8 +29,8 @@ $ python2 setup.py install
 $ cd .. && rm -rf validate_email
 ```
 
-Afterwards, make sure that `parser.py` and `credentials.sqlite` are in the same folder the collections have been 
-**decompressed**:
+Afterwards, make sure that `parser.py` is in the same folder the collections and the subcollections inside the 
+collections have been **decompressed**:
 
 ```
 $ tree -x
@@ -49,12 +49,9 @@ $ tree -x
 │   └── ...
 ├── Antipublic MYR & ZABUGOR #2
 │   └── ...
-├── credentials.sqlite
 ├── README.md
 └── parser.py
 ```
-
-Do note that each collection's subcollections **must be** decompressed as well. 
 
 After making sure that everything is ready, run the script with the following command:
 
