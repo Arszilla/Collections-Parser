@@ -118,7 +118,7 @@ class LeakParser:
 
             self.create_credentials_table = """CREATE TABLE IF NOT EXISTS credentials (
                 collection INTEGER, 
-                subcollection INTEGER, 
+                subcollection TEXT, 
                 username TEXT, 
                 email TEXT, 
                 password TEXT
@@ -254,7 +254,7 @@ class LeakParser:
 
             self.cursor.execute(sql_query,
                                 (self.collection_id,
-                                 self.subcollection_id,
+                                 self.subcollection,
                                  str(info["user"]),
                                  str(info["mail"]),
                                  str(info["pass"]),))
