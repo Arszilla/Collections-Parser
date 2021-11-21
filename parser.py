@@ -1,332 +1,370 @@
-import sqlite3
-import sys
-from validate_email import validate_email
-import hashlib
-import binascii
 import os
 import shutil
+import sqlite3
+
+from validate_email import validate_email
 
 
 class LineParser:
-
     @staticmethod
-    def parsesimplelinebyseparator(s, sep, sepname):
-        typ = ""
-        mail = ""
-        user = ""
-        passwd = ""
+    def parse_line_seperator(line, seperator, seperator_name):
+        line_type = ""
+        email = ""
+        username = ""
+        password = ""
 
-        if s.count(sep) == 1:
-            l = s.split(sep)
+        if line.count(seperator) == 1:
+            split_line = line.split(seperator)
 
-            if validate_email(l[0]):
-                typ = "user_or_mail_%s_pass" % sepname
-                user = l[0]
-                mail = l[0]
+            if validate_email(split_line[0]):
+                line_type = "user_or_mail_%s_pass" % seperator_name
+                username = split_line[0]
+                email = split_line[0]
 
             else:
-                typ = "user_or_mail_%s_pass" % sepname
-                user = l[0]
+                line_type = "user_or_mail_%s_pass" % seperator_name
+                username = split_line[0]
 
-            passwd = l[1]
+            password = split_line[1]
 
-            return True, user, mail, passwd, typ
+            return True, username, email, password, line_type
 
         return False, "", "", "", ""
 
     @staticmethod
-    def parseline(s):
-        typ = ""
-        mail = ""
-        user = ""
-        passwd = ""
-
-        bvalid = False
+    def parse_lines(line):
+        line_type = ""
+        email = ""
+        username = ""
+        password = ""
 
         # Case: mail@mail.com:password
         # Case: username:password
-        #Case: mail@mail.com;password
-        #Case: username;password
+        # Case: mail@mail.com;password
+        # Case: username;password
 
-        good, user, mail, passwd, typ = LineParser.parsesimplelinebyseparator(s,
-                                                                              ':',
-                                                                              "doubledots_or_dotcomma")
+        good, username, email, password, line_type = LineParser.parse_line_seperator(line,
+                                                                                     ':',
+                                                                                     "doubledots_or_dotcomma")
 
         if not good:
-            good, user, mail, passwd, typ = LineParser.parsesimplelinebyseparator(s,
-                                                                                  ';',
-                                                                                  "doubledots_or_dotcomma")
+            good, username, email, password, line_type = LineParser.parse_line_seperator(line,
+                                                                                         ';',
+                                                                                         "doubledots_or_dotcomma")
 
         if good:
-            bvalid = True
-
-        if bvalid:
-            return {"type": typ,
-                    "mail": mail,
-                    "user": user,
-                    "pass": passwd}
+            return {"type": line_type,
+                    "mail": email,
+                    "user": username,
+                    "pass": password}
 
 
 class LeakParser:
+    def __init__(self, leak_path):
+        self.max_line_length = 200
+        self.min_line_length = 3
+        self.linebreaks = ["\r\n",
+                           "\r",
+                           "\n"]
 
-    def updatecache(self):
-        if self.beof:
+        self.collections_dict = {}
+        self.subcollections_dict = {}
+
+        self.collection = ""
+        self.subcollection = ""
+        self.collection_id = 0
+        self.subcollection_id = 0
+
+        self.leak_path = leak_path
+
+        self.connection = None
+        self.cursor = None
+        self.initiate_database()
+
+        self.get_collections()
+        self.set_collection()
+
+        self.open_leak = open(self.leak_path, "rb")
+        self.leak_cache = ""
+
+        self.current_cache = 0
+        self.current_line_start = 0
+        self.current_line_end = 0
+
+        self.eof = False
+
+        self.line_error = False
+
+        self.parse_to_database_counter = 0
+
+        self.parse_to_database = self.parse_to_database_actual
+
+    def initiate_database(self):
+        try:
+            # Attempt to create or connect to the database:
+            self.connection = sqlite3.connect("credentials.sqlite")
+            self.connection.text_factory = str
+
+            # Create tables, if they don't exist already:
+            self.create_collections_table = """CREATE TABLE IF NOT EXISTS collections (
+                collection_id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                collection_name TEXT
+                )"""
+
+            self.create_subcollections_table = """CREATE TABLE IF NOT EXISTS subcollections (
+                subcollection_id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                subcollection_name TEXT
+                )"""
+
+            self.create_credentials_table = """CREATE TABLE IF NOT EXISTS credentials (
+                collection INTEGER, 
+                subcollection INTEGER, 
+                username TEXT, 
+                email TEXT, 
+                password TEXT
+                )"""
+
+            self.connection.execute(self.create_collections_table)
+            self.connection.execute(self.create_subcollections_table)
+            self.connection.execute(self.create_credentials_table)
+
+            # Create a cursor object:
+            self.cursor = self.connection.cursor()
+
+        except sqlite3.Error as error:
+            pass
+
+    def update_cache(self):
+        if self.eof:
             return
 
-        if len(self.fleakcache)-self.icurcache > self.maxlinelength:
+        if len(self.leak_cache)-self.current_cache > self.max_line_length:
             return
 
-        newread = self.fleak.read(0x1000000)
+        new_read = self.open_leak.read(0x1000000)
 
-        if len(newread) < 0x1000000:
-            self.beof = True
+        if len(new_read) < 0x1000000:
+            self.eof = True
 
-        self.fleakcache = self.fleakcache[self.icurcache:] + newread
-        self.icurcache = 0
+        self.leak_cache = self.leak_cache[self.current_cache:] + new_read
+        self.current_cache = 0
 
-    def updatecurline(self):
-        self.updatecache()
+    def update_current_line(self):
+        self.update_cache()
 
         for linebreak in self.linebreaks:
             try:
-                ibr = self.fleakcache.index(linebreak,
-                                            self.icurcache,
-                                            self.icurcache+self.maxlinelength)
+                leak_index = self.leak_cache.index(linebreak,
+                                                   self.current_cache,
+                                                   self.current_cache + self.max_line_length)
 
-                self.icurlinestart = self.icurcache
-                self.icurlineend = ibr+len(linebreak)
-                self.icurcache = self.icurlineend
+                self.current_line_start = self.current_cache
+                self.current_line_end = leak_index + len(linebreak)
+                self.current_cache = self.current_line_end
 
                 return
 
             except:
                 continue
 
-        if self.beof and (len(self.fleakcache)-self.icurcache <= self.maxlinelength) and (len(self.fleakcache)-self.icurcache != 0):
-            self.icurlinestart = self.icurcache
-            self.icurcache = len(self.fleakcache)
-            self.icurlineend = self.icurcache
+        if self.eof and (len(self.leak_cache) - self.current_cache <= self.max_line_length) and (len(self.leak_cache) - self.current_cache != 0):
+            self.current_line_start = self.current_cache
+            self.current_cache = len(self.leak_cache)
+            self.current_line_end = self.current_cache
 
             return
 
-        self.lineerr = True
+        self.line_error = True
 
-    def getcurline(self):
-        return self.fleakcache[self.icurlinestart:self.icurlineend].strip()
+    def get_current_line(self):
+        return self.leak_cache[self.current_line_start:self.current_line_end].strip()
 
-    def setcollection(self):
-        scriptdir = os.path.dirname(os.path.realpath(__file__))
+    def set_collection(self):
+        script_path = os.path.dirname(os.path.realpath(__file__))
 
-        relleakpath = os.path.relpath(self.leakpath, scriptdir)
+        relative_leak_path = os.path.relpath(self.leak_path, script_path)
 
-        temp = os.path.normpath(relleakpath)
-        temp = temp.split(os.sep)
+        directory = os.path.normpath(relative_leak_path)
+        directory = directory.split(os.sep)
 
-        self.collection = str(temp[0])
-        self.subcollection = str(temp[1])
+        self.collection = str(directory[0])
+        self.subcollection = str(directory[1])
 
-        bupdatecollections = False
+        if not self.collections_dict.has_key(self.collection):
+            self.add_collection(self.collection)
 
-        if not self.BBDDcollections.has_key(self.collection):
-            self.addBBDDcollection(self.collection)
+        if not self.subcollections_dict.has_key(self.subcollection):
+            self.add_subcollection(self.subcollection)
 
-        if not self.BBDDsubcollections.has_key(self.subcollection):
-            self.addBBDDsubcollection(self.subcollection)
+        self.collection_id = self.collections_dict[self.collection]
+        self.subcollection_id = self.subcollections_dict[self.subcollection]
 
-        self.collectionid = self.BBDDcollections[self.collection]
-        self.subcollectionid = self.BBDDsubcollections[self.subcollection]
+    def add_collection(self, collection):
+        # print "Collection:", collection
 
-    def addBBDDcollection(self, collection):
-        print collection
+        sql_query = """INSERT INTO collections (collection_name) VALUES (?)"""
 
-        sql = """INSERT INTO collections (collection_name) VALUES (?)"""
+        self.cursor.execute(sql_query,
+                            (collection,))
+        self.get_collections()
 
-        self.cursor.execute(sql, (collection,))
-        self.getBBDDcollections()
+    def add_subcollection(self, subcollection):
+        # print "Subcollection:", subcollection
 
-    def addBBDDsubcollection(self, subcollection):
-        print subcollection
+        sql_query = """INSERT INTO subcollections (subcollection_name) VALUES (?)"""
 
-        sql = """INSERT INTO subcollections (subcollection_name) VALUES (?)"""
+        self.cursor.execute(sql_query,
+                            (subcollection,))
+        self.get_collections()
 
-        self.cursor.execute(sql, (subcollection,))
-        self.getBBDDcollections()
+    def get_collections(self):
+        self.collections_dict = {}
+        
+        sql_query = self.cursor.execute("SELECT * FROM collections")
 
-    def getBBDDcollections(self):
-        self.BBDDcollections = {}
-        l = self.cursor.execute("SELECT * FROM collections")
+        for row in sql_query:
+            self.collections_dict[str(row[1])] = row[0]
 
-        for e in l:
-            self.BBDDcollections[str(e[1])] = e[0]
+        self.subcollections_dict = {}
 
-        self.BBDDsubcollections = {}
+        sql_query = self.cursor.execute("SELECT * FROM subcollections")
 
-        l = self.cursor.execute("SELECT * FROM subcollections")
+        for row in sql_query:
+            self.subcollections_dict[str(row[1])] = row[0]
 
-        for e in l:
-            self.BBDDsubcollections[str(e[1])] = e[0]
+        # print self.collections_dict
+        # print self.subcollections_dict
 
-        print self.BBDDcollections
-        print self.BBDDsubcollections
-
-    def __init__(self, leakpath):
-        self.maxlinelength = 200
-        self.minlinelength = 3
-        self.linebreaks = ["\r\n", "\r", "\n"]
-
-        self.BBDDcollections = {}
-        self.BBDDsubcollections = {}
-
-        self.collection = ""
-        self.subcollection = ""
-        self.collectionid = 0
-        self.subcollectionid = 0
-
-        self.leakpath = leakpath
-
-        self.conn = sqlite3.connect('credentials.sqlite')
-        self.conn.text_factory = str
-        self.cursor = self.conn.cursor()
-
-        self.getBBDDcollections()
-        self.setcollection()
-
-        self.fleak = open(self.leakpath, "rb")
-        self.fleakcache = ""
-
-        self.icurcache = 0
-        self.icurlinestart = 0
-        self.icurlineend = 0
-
-        self.beof = False
-
-        self.lineerr = False
-
-        self.test_info2bbdd_counter = 0
-
-        self.info2bbdd = self.info2bbdd_real
-
-    def info2bbdd_test(self, info):
-        if self.test_info2bbdd_counter % 20000 == 0:
+    def parse_to_database_test(self, info):
+        if self.parse_to_database_counter % 20000 == 0:
             if info:
-                print repr(info)
+                print "File format type:", repr(info)
 
-        self.test_info2bbdd_counter += 1
+        self.parse_to_database_counter += 1
 
-    def info2bbdd_real(self, info):
-        if self.test_info2bbdd_counter % 20000 == 0:
+    def parse_to_database_actual(self, info):
+        if self.parse_to_database_counter % 20000 == 0:
             if info:
-                print repr(info)
+                print "File format type:", repr(info)
 
-        self.test_info2bbdd_counter += 1
+        self.parse_to_database_counter += 1
+
         if info:
-            sql = """INSERT INTO credentials (collection, subcollection, username, email, password) VALUES (?, ?, ?, ?, ?)"""
-            self.cursor.execute(sql, (self.collectionid, self.subcollectionid, str(
-                info["user"]), str(info["mail"]), str(info["pass"]),))
+            sql_query = """INSERT INTO credentials (collection, subcollection, username, email, password) VALUES (?, ?, ?, ?, ?)"""
+
+            self.cursor.execute(sql_query,
+                                (self.collection_id,
+                                 self.subcollection_id,
+                                 str(info["user"]),
+                                 str(info["mail"]),
+                                 str(info["pass"]),))
 
     def run(self):
-        lastinconsistences = []
-        binconsistence = False
+        inconsistency_list = []
 
-        self.updatecurline()
+        inconsistency_status = False
 
-        line1 = LineParser.parseline(self.getcurline())
-        line2 = LineParser.parseline(self.getcurline())
-        line3 = LineParser.parseline(self.getcurline())
-        line4 = LineParser.parseline(self.getcurline())
-        line5 = LineParser.parseline(self.getcurline())
+        self.update_current_line()
 
-        if self.lineerr or not(line1 != None and
-                               line2 != None and
-                               line3 != None and
-                               line4 != None and
-                               line5 != None and
-                               line1["type"] == line2["type"] and
-                               line2["type"] == line3["type"] and
-                               line3["type"] == line4["type"] and
-                               line4["type"] == line5["type"]):
+        line_1 = LineParser.parse_lines(self.get_current_line())
+        line_2 = LineParser.parse_lines(self.get_current_line())
+        line_3 = LineParser.parse_lines(self.get_current_line())
+        line_4 = LineParser.parse_lines(self.get_current_line())
+        line_5 = LineParser.parse_lines(self.get_current_line())
 
-            print "Inconsistent file by first lines"
+        if self.line_error or not(line_1 != None and
+                                  line_2 != None and
+                                  line_3 != None and
+                                  line_4 != None and
+                                  line_5 != None and
+                                  line_1["type"] == line_2["type"] and
+                                  line_2["type"] == line_3["type"] and
+                                  line_3["type"] == line_4["type"] and
+                                  line_4["type"] == line_5["type"]):
 
-            binconsistence = True
+            print "File is inconsistent by the first few lines!"
 
-        if not binconsistence:
-            FileLeakType = line1["type"]
+            inconsistency_status = True
+
+        if not inconsistency_status:
+            FileLeakType = line_1["type"]
 
             print "FileLeakType:", FileLeakType
 
-            InconsistencesCounter = 0
+            inconsistency_counter = 0
 
-            self.info2bbdd(line1)
-            self.info2bbdd(line2)
-            self.info2bbdd(line3)
-            self.info2bbdd(line4)
-            self.info2bbdd(line5)
+            self.parse_to_database(line_1)
+            self.parse_to_database(line_2)
+            self.parse_to_database(line_3)
+            self.parse_to_database(line_4)
+            self.parse_to_database(line_5)
 
-            while not self.lineerr:
-                self.updatecurline()
-                line = LineParser.parseline(self.getcurline())
+            while not self.line_error:
+                self.update_current_line()
+
+                line = LineParser.parse_lines(self.get_current_line())
 
                 if not line or line["type"] != FileLeakType:
-                    InconsistencesCounter += 1
-                    lastinconsistences.append(self.getcurline())
-                    if len(lastinconsistences) > 10:
-                        lastinconsistences = lastinconsistences[-10:]
-                        # print "CAREFUL Inconsistent line after pre-filter!!!!", self.getcurline()
+                    inconsistency_counter += 1
+                    inconsistency_list.append(self.get_current_line())
+
+                    if len(inconsistency_list) > 10:
+                        inconsistency_list = inconsistency_list[-10:]
 
                 else:
-                    if InconsistencesCounter:
-                        InconsistencesCounter -= 1
+                    if inconsistency_counter:
+                        inconsistency_counter -= 1
 
-                if InconsistencesCounter >= 10:
-                    print "CAREFUL Too much Inconsistences, break!"
-                    binconsistence = True
+                if inconsistency_counter >= 10:
+                    print "Careful! Too many inconsistencies! Breaking!"
+
+                    inconsistency_status = True
+
                     break
 
-                self.info2bbdd(line)
+                self.parse_to_database(line)
 
-        if binconsistence:
-            f = open("inconsistencies.txt", "a+b")
-            f.write(self.leakpath+":::"+repr(lastinconsistences)+"\r\n")
-            f.close()
+        if inconsistency_status:
+            with open("inconsistencies.txt", "a+b") as inconsistency_log:
+                inconsistency_log.write(self.leak_path + ": " + repr(inconsistency_list) + "\r\n")
+                inconsistency_log.close()
 
         else:
-            f = open("consistences.txt", "a+b")
-            f.write(self.leakpath+"\r\n")
-            f.close()
+            with open("consistences.txt", "a+b") as consistency_log:
+                consistency_log.write(self.leak_path + "\r\n")
+                consistency_log.close()
 
-        self.conn.commit()
+        self.connection.commit()
 
 
 def manage_files(file):
     try:
         print "Managing file:", file
-        
-        lp = LeakParser(file)
-        
-        print lp.collection
-        print lp.subcollection
-        
-        lp.run()
-        lp.fleak.close()
-        
-        shutil.move(file, file+".PARSED")
-    
-    except Exception as e:
-        s = file + "----" + repr(e.message) + "----" + repr(e.args) + "\r\n"
-        f = open("exceptions.txt", "a+b")
-        f.write(s)
-        f.close()
+
+        leakparser_class = LeakParser(file)
+
+        print "Parsing Collection:", leakparser_class.collection
+        print "Parsing subcollection:", leakparser_class.subcollection
+
+        leakparser_class.run()
+        leakparser_class.open_leak.close()
+
+        shutil.move(file, file + ".PARSED")
+
+    except Exception as error:
+        with open("exceptions.txt", "a+b") as exception_log:
+            exception_log.write(file + ": " + repr(error.message) + " - " + repr(error.args) + "\r\n")
+            exception_log.close()
 
 
 def recurse_files(pwd):
-    for e in os.listdir(pwd):
-        if "NOTPARSED" not in e and "PARSED" not in e:
-            if os.path.isdir(pwd+"/"+e):
-                recurse_files(pwd+"/"+e)
+    for folder in os.listdir(pwd):
+        if "NOTPARSED" not in folder and "PARSED" not in folder:
+            if os.path.isdir(pwd + "/" + folder):
+                recurse_files(pwd + "/" + folder)
 
             else:
-                manage_files(pwd+"/"+e)
+                manage_files(pwd + "/" + folder)
 
 
 if __name__ == "__main__":
